@@ -402,7 +402,10 @@ class BoundKernelSignature(ABC):
         """Resolves a binding to a concrete Value.
 
         Note that for some implementations, this may involve creating IR. It
-        is recommended to cache it.
+        is recommended to cache it, or, as `ThreadEmitter` does, to resolve
+        each reference once and keep the value. What it returns must dominate
+        every use of it, so an implementation which creates IR has to
+        materialize it where it does.
         """
         ...
 

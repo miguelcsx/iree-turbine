@@ -307,6 +307,19 @@ class DispatchEntrypoint(BoundKernelSignature):
         return dynamic_dims
 
     def resolve(self, binding: BindingDesc) -> Value:
+        """Materializes a binding where it dominates every use of it.
+
+        A binding of this entrypoint is function scoped: the emitter keeps the
+        value for the rest of the trace, so it has to dominate every use of it,
+        and the top of the entry block is the only position which can dominate
+        every use it will ever have.  These bindings are materialized from the
+        arguments of that block alone, by pure operations, so materializing
+        them there costs nothing.
+        """
+        with InsertionPoint.at_block_begin(self.entry_block):
+            return self._materialize_binding(binding)
+
+    def _materialize_binding(self, binding: BindingDesc) -> Value:
         ref_type, ref_value = binding.reference
         if ref_type == "grid":
             return stream_d.dispatch_workgroup_id(
