@@ -11,6 +11,7 @@ import torch
 from iree.turbine.aot import export
 import iree.turbine.kernel as tk
 import iree.turbine.kernel.lang as tkl
+from iree.turbine.runtime import Launchable
 
 
 def export_softmax_kernel():
@@ -43,6 +44,47 @@ def export_softmax_kernel():
     a = torch.ones(64, 64, dtype=torch.float16)
     exported = export(model, a)
     return exported
+
+
+def export_copy_column_kernel(input):
+    """Exports a kernel whose grid id is first asked for inside a loop body.
+
+    Axis 1 selects the element an instance owns.  It is first used in the body
+    of the loop and used again at the root, where only a value materialized at
+    the top of the entry block dominates it.
+    """
+    M = tkl.sym.M
+    K = tkl.sym.K
+
+    @tk.gen.kernel(M, K)
+    def copy_column(
+        input: tkl.InputBuffer[M, K, tkl.f32], output: tkl.OutputBuffer[M, K, tkl.f32]
+    ):
+        row_index = tkl.program_id(0)
+        value = tkl.load(input, (row_index, 0), (1, 1))
+
+        @tkl.for_loop(0, 4, init_args=[value])
+        def body(i, value):
+            return (tkl.load(input, (row_index, tkl.program_id(1)), (1, 1)),)
+
+        tkl.store(output, (row_index, tkl.program_id(1)), body[0])
+
+    class NN(torch.nn.Module):
+        def forward(self, input):
+            return copy_column(input)
+
+    return export(NN(), input)
+
+
+class LaunchTest(unittest.TestCase):
+    def test_kernel_binding_a_grid_axis_in_a_loop_body(self):
+        input = torch.randn(4, 8, dtype=torch.float32)
+        asm = str(export_copy_column_kernel(input).mlir_module)
+        output = Launchable.jit_compile(asm, entry_point="main")(input)
+
+        # Every element is written by the instance that owns it, so the result
+        # does not depend on the order the workgroups run in.
+        torch.testing.assert_close(output, input)
 
 
 class AotKernelTest(unittest.TestCase):
